@@ -247,6 +247,15 @@ mitigate_cve_2024_27822() {
 harden_firewall() {
     log "Applying firewall hardening..."
 
+    # CRITICAL: Check if SSH is enabled BEFORE we block anything
+    SSH_ENABLED=false
+    if systemsetup -getremotelogin 2>/dev/null | grep -qi "on"; then
+        SSH_ENABLED=true
+        echo -e "${YELLOW}[WARNING] SSH (Remote Login) is currently ENABLED${NC}"
+        echo -e "${YELLOW}          Firewall will be configured to PRESERVE SSH access${NC}"
+        log "SSH detected as enabled - will preserve SSH access"
+    fi
+
     # Enable application firewall
     /usr/libexec/ApplicationFirewall/socketfilterfw --setglobalstate on
     echo -e "${GREEN}[OK] Application firewall enabled${NC}"
@@ -255,8 +264,21 @@ harden_firewall() {
     /usr/libexec/ApplicationFirewall/socketfilterfw --setstealthmode on
     echo -e "${GREEN}[OK] Stealth mode enabled${NC}"
 
-    # Block all incoming connections (except essential)
-    /usr/libexec/ApplicationFirewall/socketfilterfw --setblockall on 2>/dev/null || true
+    # SAFE: Don't use block-all if SSH is enabled (would lock out remote users!)
+    if [[ "$SSH_ENABLED" == "true" ]]; then
+        echo -e "${YELLOW}[SKIP] Block-all mode SKIPPED to preserve SSH access${NC}"
+        echo "       To enable block-all, first disable SSH or use console access"
+        log "SKIP: block-all mode skipped - SSH is enabled"
+
+        # Explicitly allow SSH daemon
+        /usr/libexec/ApplicationFirewall/socketfilterfw --add /usr/sbin/sshd 2>/dev/null || true
+        /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp /usr/sbin/sshd 2>/dev/null || true
+        echo -e "${GREEN}[OK] SSH daemon explicitly allowed through firewall${NC}"
+    else
+        # Safe to block all - no SSH to preserve
+        /usr/libexec/ApplicationFirewall/socketfilterfw --setblockall on 2>/dev/null || true
+        echo -e "${GREEN}[OK] Block-all incoming connections enabled${NC}"
+    fi
 
     # Allow signed applications
     /usr/libexec/ApplicationFirewall/socketfilterfw --setallowsigned on
