@@ -1,0 +1,106 @@
+#!/bin/bash
+# Elyan Labs Security Shield - Post-installation script
+# This runs after the PKG payload is installed
+
+set -e
+
+LOG_FILE="/var/log/elyan/install.log"
+mkdir -p /var/log/elyan
+exec > >(tee -a "$LOG_FILE") 2>&1
+
+echo "=========================================="
+echo "Elyan Labs Security Shield - Installation"
+echo "Date: $(date)"
+echo "=========================================="
+
+# Create necessary directories
+mkdir -p /var/db/elyan
+mkdir -p /var/log/elyan
+mkdir -p /usr/local/bin
+
+# Install scripts
+echo "Installing scripts..."
+cp /usr/local/share/elyan-security/elyan-harden.sh /usr/local/bin/elyan-harden
+cp /usr/local/share/elyan-security/elyan-audit.sh /usr/local/bin/elyan-audit
+cp /usr/local/share/elyan-security/elyan-monitor.sh /usr/local/bin/elyan-monitor
+
+# Make executable
+chmod 755 /usr/local/bin/elyan-harden
+chmod 755 /usr/local/bin/elyan-audit
+chmod 755 /usr/local/bin/elyan-monitor
+
+# Create status command
+cat > /usr/local/bin/elyan-status << 'EOF'
+#!/bin/bash
+echo "Elyan Labs Security Shield Status"
+echo "=================================="
+echo ""
+
+# Check if monitor is running
+if launchctl list 2>/dev/null | grep -q "com.elyanlabs.security-monitor"; then
+    echo "[RUNNING] Security monitor is active"
+else
+    echo "[STOPPED] Security monitor is not running"
+    echo "  Start with: sudo launchctl load /Library/LaunchDaemons/com.elyanlabs.security-monitor.plist"
+fi
+
+# Show recent alerts
+if [[ -f /var/log/elyan/security_alerts.log ]]; then
+    ALERTS=$(wc -l < /var/log/elyan/security_alerts.log | tr -d ' ')
+    echo ""
+    echo "Security alerts logged: $ALERTS"
+    echo "Recent alerts:"
+    tail -5 /var/log/elyan/security_alerts.log 2>/dev/null || echo "  (none)"
+fi
+
+# Show last audit
+if [[ -f /var/log/elyan/last_audit.txt ]]; then
+    echo ""
+    echo "Last audit: $(cat /var/log/elyan/last_audit.txt)"
+fi
+
+echo ""
+echo "Commands:"
+echo "  sudo elyan-audit    - Run security audit"
+echo "  sudo elyan-harden   - Apply security hardening"
+echo "  elyan-status        - Show this status"
+EOF
+chmod 755 /usr/local/bin/elyan-status
+
+# Install LaunchDaemon
+echo "Installing LaunchDaemon..."
+cp /usr/local/share/elyan-security/com.elyanlabs.security-monitor.plist /Library/LaunchDaemons/
+
+# Set permissions
+chown root:wheel /Library/LaunchDaemons/com.elyanlabs.security-monitor.plist
+chmod 644 /Library/LaunchDaemons/com.elyanlabs.security-monitor.plist
+
+# Run initial audit
+echo ""
+echo "Running initial security audit..."
+/usr/local/bin/elyan-audit 2>&1 | tee /var/log/elyan/initial_audit.log || true
+
+# Create baseline
+echo ""
+echo "Creating security baselines..."
+find /usr/bin /usr/sbin /usr/libexec -perm -4000 2>/dev/null | sort > /var/db/elyan/suid_baseline.txt || true
+ls -la /Library/Filesystems 2>/dev/null > /var/db/elyan/filesystems_baseline.txt || true
+
+# Record installation
+echo "$(date)" > /var/log/elyan/installed.txt
+
+echo ""
+echo "=========================================="
+echo "Installation Complete!"
+echo "=========================================="
+echo ""
+echo "Next steps:"
+echo "  1. Review the audit above"
+echo "  2. Run 'sudo elyan-harden' to apply mitigations"
+echo "  3. Enable monitoring:"
+echo "     sudo launchctl load /Library/LaunchDaemons/com.elyanlabs.security-monitor.plist"
+echo ""
+echo "For help: elyan-status"
+echo ""
+
+exit 0
